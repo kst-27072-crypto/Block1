@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Boss Battle - Interactive Entropy</title>
+    <style>
+        body { margin: 0; background: #000; color: white; font-family: 'Segoe UI', sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        #game-container { position: relative; width: 500px; display: flex; flex-direction: column; align-items: center; }
+        canvas { background: #050505; border: 2px solid #222; display: block; border-radius: 0 0 8px 8px; transition: filter 0.3s; }
+        .ui-header { width: 100%; background: #111; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; border: 2px solid #222; border-bottom: none; border-radius: 8px 8px 0 0; font-size: 14px; }
+        .boss-section { flex-grow: 1; margin: 0 15px; display: flex; flex-direction: column; gap: 3px; }
+        #hp-bar-bg { width: 100%; height: 8px; background: #331111; border-radius: 4px; overflow: hidden; }
+        #hp-bar-fill { width: 100%; height: 100%; background: linear-gradient(90deg, #ff4444, #990000); transition: width 0.2s; }
+        #lives-display { color: #ff4444; letter-spacing: 2px; min-width: 80px; }
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; text-align: center; border-radius: 8px; }
+        .btn { background: #00d2ff; color: #000; border: none; padding: 10px 25px; margin: 15px; cursor: pointer; font-weight: bold; border-radius: 4px; transition: 0.2s; }
+        .btn:hover { transform: scale(1.05); background: #fff; }
+        .hidden { display: none !important; }
+        #status-msg { position: absolute; bottom: 80px; color: #ff0044; font-weight: bold; pointer-events: none; text-transform: uppercase; text-shadow: 0 0 10px #ff0044; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div class="ui-header">
+            <div id="lives-display">❤️❤️❤️</div>
+            <div class="boss-section">
+                <div id="boss-name" style="font-size: 10px; color: #ff4444; font-weight: bold;">STAGE 1</div>
+                <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
+            </div>
+            <div id="power-indicator" style="color:#00d2ff; font-size: 10px; width:40px; font-weight: bold;"></div>
+        </div>
+
+        <div id="start-screen" class="overlay">
+            <h1 style="color:#ff4444; margin-bottom: 5px;">VOID TRILOGY</h1>
+            <p style="color:#aaa; font-size: 14px;">WASD to Move. Shoot the purple orbs to survive!</p>
+            <button class="btn" id="startBtn">INITIATE BATTLE</button>
+        </div>
+
+        <div id="end-screen" class="overlay hidden">
+            <h2 id="end-title">DEFEATED</h2>
+            <button class="btn" id="restartBtn">RETRY</button>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+        <div id="status-msg"></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const hpFill = document.getElementById('hp-bar-fill');
+    const livesDisplay = document.getElementById('lives-display');
+    const bossNameText = document.getElementById('boss-name');
+    const statusMsg = document.getElementById('status-msg');
+    const powerIndicator = document.getElementById('power-indicator');
+    
+    canvas.width = 500; canvas.height = 500;
+
+    let gameActive = false, game = {};
+
+    function createBoss(stage) {
+        if (stage === 1) return { name: "GUARDIAN UNIT", x: 150, y: 50, w: 200, h: 60, hp: 1200, maxHp: 1200, speed: 3, timer: 0, color: '#ff4444' };
+        if (stage === 2) return { name: "VOID WEAVER", x: 100, y: 40, w: 300, h: 70, hp: 3200, maxHp: 3200, speed: 4.5, timer: 0, color: '#a033ff' };
+        return { name: "ENTROPY CORE", x: 175, y: 30, w: 150, h: 150, hp: 5500, maxHp: 5500, speed: 2, timer: 0, color: '#ffffff', enraged: false };
+    }
+
+    function initGame() {
+        game = { stage: 1, player: { x: 235, y: 430, w: 18, h: 18, lives: 3, speed: 6.5, invinc: 0, shield: false, rapidFire: 0 },
+                 boss: createBoss(1), pBullets: [], bBullets: [], supplements: [], keys: {}, transitioning: false, dir: 1 };
+        updateUI();
+    }
+
+    function showMsg(txt, color = "#ff0044") { 
+        statusMsg.innerText = txt; 
+        statusMsg.style.color = color;
+        setTimeout(() => { if (statusMsg.innerText === txt) statusMsg.innerText = ""; }, 2500); 
+    }
+
+    function update() {
+        if (!gameActive || game.transitioning) return;
+
+        // Player Movement
+        if (game.keys['KeyA'] && game.player.x > 0) game.player.x -= game.player.speed;
+        if (game.keys['KeyD'] && game.player.x < canvas.width - game.player.w) game.player.x += game.player.speed;
+        if (game.keys['KeyW'] && game.player.y > 150) game.player.y -= game.player.speed;
+        if (game.keys['KeyS'] && game.player.y < canvas.height - game.player.h) game.player.y += game.player.speed;
+        
+        if (game.player.invinc > 0) game.player.invinc--;
+        if (game.player.rapidFire > 0) game.player.rapidFire--;
+
+        // Player Auto Fire
+        let fireRate = game.player.rapidFire > 0 ? 55 : 125;
+        if (Date.now() % fireRate < 20) game.pBullets.push({ x: game.player.x + 7, y: game.player.y, w: 4, h: 12 });
+
+        game.boss.timer++;
+        
+        // Enrage Check (Stage 3 at 25% HP)
+        if (game.stage === 3 && game.boss.hp < game.boss.maxHp * 0.25 && !game.boss.enraged) {
+            game.boss.enraged = true;
+            game.boss.speed *= 2.5;
+            game.boss.color = "#ff0000";
+            showMsg("CORE ENRAGED: PROTOCOL OMEGA", "#ff0000");
+        }
+
+        // Boss Movement
+        game.boss.x += game.boss.speed * game.dir;
+        if (game.boss.x <= 0 || game.boss.x >= canvas.width - game.boss.w) game.dir *= -1;
+
+        // --- ATTACK LOGIC ---
+        let cd = (game.boss.enraged) ? 0.6 : 1; 
+
+        // STAGE 1
+        if (game.stage === 1) {
+            if (game.boss.timer % 25 === 0) game.bBullets.push({ x: Math.random()*canvas.width, y: -10, vx: 0, vy: 4.5, size: 7, color: '#ff9900' });
+            if (game.boss.timer % 70 === 0) {
+                let dx = game.player.x - (game.boss.x+game.boss.w/2), dy = game.player.y - game.boss.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                game.bBullets.push({ x: game.boss.x+game.boss.w/2, y: game.boss.y+30, vx: (dx/dist)*5, vy: (dy/dist)*5, size: 10, color: '#ff0044' });
+            }
+        } 
+        
+        // STAGE 2
+        else if (game.stage === 2) {
+            if (game.boss.timer % 110 === 0) game.bBullets.push({ x: Math.random()*(canvas.width-60), y: 0, vx: 0, vy: 7, size: 60, color: 'rgba(160, 51, 255, 0.4)', isLaser: true });
+            if (game.boss.timer % 90 === 0) {
+                for(let i=0; i<12; i++) {
+                    let a = (Math.PI*2/12)*i;
+                    game.bBullets.push({ x: game.boss.x+150, y: game.boss.y+35, vx: Math.cos(a)*4, vy: Math.sin(a)*4, size: 12, color: '#a033ff'});
+                }
+            }
+            if (game.boss.timer % 75 === 0) {
+                let dx = game.player.x - (game.boss.x+150), dy = game.player.y - game.boss.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                game.bBullets.push({ x: game.boss.x+150, y: game.boss.y+35, vx: (dx/dist)*6.5, vy: (dy/dist)*6.5, size: 10, color: '#00ffcc' });
+            }
+        } 
+        
+        // STAGE 3
+        else if (game.stage === 3) {
+            let angle = game.boss.timer * 0.15;
+            if (game.boss.timer % (5 * cd) === 0) {
+                game.bBullets.push({ x: game.boss.x+game.boss.w/2, y: game.boss.y+game.boss.h/2, vx: Math.cos(angle)*5, vy: Math.sin(angle)*5, size: 6, color: game.boss.enraged ? 'red' : 'white'});
+            }
+            
+            // Void Collapse - Added "isVoidBall: true" flag
+            if (game.boss.timer % (120 * cd) === 0) {
+                for(let i=0; i<10; i++) {
+                    game.bBullets.push({ x: (canvas.width/10)*i + 25, y: -20, vx: 0, vy: 6, size: 16, color: '#330033', isVoidBall: true });
+                }
+            }
+
+            if (game.boss.enraged && game.boss.timer % 50 === 0) {
+                let dx = game.player.x - (game.boss.x+game.boss.w/2);
+                let dy = game.player.y - (game.boss.y+game.boss.h/2);
+                let baseAngle = Math.atan2(dy, dx);
+                
+                for (let i = -1; i <= 1; i++) {
+                    let spreadAngle = baseAngle + (i * 0.25);
+                    game.bBullets.push({ x: game.boss.x+game.boss.w/2, y: game.boss.y+game.boss.h/2, vx: Math.cos(spreadAngle)*7, vy: Math.sin(spreadAngle)*7, size: 10, color: '#ffaa00' });
+                }
+            }
+        }
+
+        // Projectile Logic (Player) - Rewritten backwards loop to safely handle dynamic bullet destruction
+        for (let i = game.pBullets.length - 1; i >= 0; i--) {
+            let b = game.pBullets[i];
+            b.y -= 15;
+            let hitDestructible = false;
+
+            // 1. Check collision with destructible boss bullets (Void Balls)
+            for (let j = game.bBullets.length - 1; j >= 0; j--) {
+                let bb = game.bBullets[j];
+                if (bb.isVoidBall) {
+                    let r = bb.size / 2;
+                    if (b.x < bb.x + r && b.x + b.w > bb.x - r && b.y < bb.y + r && b.y + b.h > bb.y - r) {
+                        game.bBullets.splice(j, 1); // Destroy the orb
+                        hitDestructible = true;
+                        break;
+                    }
+                }
+            }
+
+            // If player bullet hit an orb, delete bullet and skip boss check
+            if (hitDestructible) {
+                game.pBullets.splice(i, 1);
+                continue;
+            }
+
+            // 2. Check Boss Collision
+            if (b.x < game.boss.x + game.boss.w && b.x + b.w > game.boss.x && b.y < game.boss.y + game.boss.h && b.y + b.h > game.boss.y) {
+                game.boss.hp -= 20; 
+                game.pBullets.splice(i, 1); 
+                updateUI();
+                if (game.boss.hp <= 0 && !game.transitioning) { 
+                    if(game.stage < 3) nextStage(); else endGame(true); 
+                }
+                continue;
+            }
+            
+            // Delete off-screen bullets
+            if (b.y < -20) game.pBullets.splice(i, 1);
+        }
+
+        // Projectile Logic (Boss)
+        game.bBullets.forEach((b, i) => {
+            b.x += b.vx; b.y += b.vy;
+            if (game.player.invinc <= 0 && b.x < game.player.x + game.player.w && b.x + b.size > game.player.x && b.y < game.player.y + game.player.h && b.y + b.size > game.player.y) {
+                if (!game.player.shield) game.player.lives--; else game.player.shield = false;
+                game.player.invinc = 60; if (!b.isLaser) game.bBullets.splice(i, 1);
+                updateUI(); if (game.player.lives <= 0) endGame(false);
+            }
+            if (b.y > canvas.height + 100 || b.x < -50 || b.x > canvas.width + 50) game.bBullets.splice(i, 1);
+        });
+
+        // Supplements
+        let dropRate = game.boss.enraged ? 300 : 450;
+        if (game.boss.timer % dropRate === 0) game.supplements.push({ x: game.boss.x + (game.boss.w/2), y: game.boss.y + 30, vy: 2, size: 15 });
+        
+        game.supplements.forEach((s, i) => {
+            s.y += s.vy;
+            if (s.x < game.player.x + game.player.w && s.x + s.size > game.player.x && s.y < game.player.y + game.player.h && s.y + s.size > game.player.y) {
+                const r = Math.random();
+                if (r < 0.33) { game.player.shield = true; showMsg("SHIELD UP", "#00d2ff"); }
+                else if (r < 0.66) { game.player.rapidFire = 350; showMsg("RAPID FIRE", "#00d2ff"); }
+                else { game.player.lives = Math.min(5, game.player.lives + 1); showMsg("HP RESTORED", "#00d2ff"); }
+                game.supplements.splice(i, 1); updateUI();
+            }
+        });
+    }
+
+    function nextStage() {
+        game.transitioning = true; game.bBullets = []; game.pBullets = []; game.stage++;
+        showMsg("PHASE " + (game.stage-1) + " DESTROYED", "#00d2ff");
+        setTimeout(() => { game.boss = createBoss(game.stage); game.player.lives = Math.min(5, game.player.lives + 1); game.transitioning = false; updateUI(); }, 2000);
+    }
+
+    function updateUI() {
+        livesDisplay.innerHTML = "❤️".repeat(Math.max(0, game.player.lives)) + (game.player.shield ? " 🛡️" : "");
+        hpFill.style.width = Math.max(0, (game.boss.hp / game.boss.maxHp * 100)) + '%';
+        bossNameText.innerText = game.boss.name; bossNameText.style.color = game.boss.color;
+        powerIndicator.innerText = game.player.rapidFire > 0 ? "⚡ FAST" : "";
+    }
+
+    function endGame(vic) {
+        gameActive = false; document.getElementById('end-screen').classList.remove('hidden');
+        document.getElementById('end-title').innerText = vic ? "GOD SLAYER" : "DEFEATED";
+        document.getElementById('end-title').style.color = vic ? "#00d2ff" : "#ff4444";
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (gameActive && !game.transitioning) {
+            
+            // Draw Player
+            if (game.player.invinc % 4 < 2) { 
+                ctx.fillStyle = '#00d2ff'; ctx.fillRect(game.player.x, game.player.y, game.player.w, game.player.h); 
+            }
+            
+            // Draw Boss
+            ctx.fillStyle = game.boss.color;
+            if (game.stage === 3) { 
+                ctx.beginPath(); ctx.arc(game.boss.x+game.boss.w/2, game.boss.y+game.boss.h/2, game.boss.w/2, 0, Math.PI*2); ctx.fill(); 
+                if(game.boss.enraged) { ctx.shadowBlur = 25; ctx.shadowColor = "red"; ctx.strokeStyle = "white"; ctx.lineWidth = 3; ctx.stroke(); }
+                else { ctx.strokeStyle = "cyan"; ctx.lineWidth = 3; ctx.stroke(); }
+            } else { 
+                ctx.fillRect(game.boss.x, game.boss.y, game.boss.w, game.boss.h); 
+                ctx.strokeStyle = 'white'; ctx.strokeRect(game.boss.x, game.boss.y, game.boss.w, game.boss.h);
+            }
+            ctx.shadowBlur = 0;
+
+            // Draw Supplements & Bullets
+            game.supplements.forEach(s => { ctx.fillStyle = '#00d2ff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.size/2, 0, Math.PI*2); ctx.fill(); });
+            ctx.fillStyle = 'yellow'; game.pBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+            
+            game.bBullets.forEach(b => { 
+                ctx.fillStyle = b.color; 
+                if(b.isLaser) { ctx.fillRect(b.x, b.y, b.size, canvas.height); }
+                else { ctx.beginPath(); ctx.arc(b.x, b.y, b.size/2, 0, Math.PI*2); ctx.fill(); }
+            });
+        }
+        requestAnimationFrame(() => { update(); draw(); });
+    }
+
+    document.getElementById('startBtn').addEventListener('click', () => { document.getElementById('start-screen').classList.add('hidden'); initGame(); gameActive = true; });
+    document.getElementById('restartBtn').addEventListener('click', () => { document.getElementById('end-screen').classList.add('hidden'); initGame(); gameActive = true; });
+    window.addEventListener('keydown', e => game.keys && (game.keys[e.code] = true));
+    window.addEventListener('keyup', e => game.keys && (game.keys[e.code] = false));
+    draw();
+</script>
+</body>
+</html>
